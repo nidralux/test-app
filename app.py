@@ -175,90 +175,37 @@ def validate_webhook_signature(f: Callable) -> Callable:
     return decorated_function
 
 @app.route('/jira-webhook', methods=['POST'])
-@validate_webhook_signature
 def jira_webhook():
-    """Handle incoming Jira webhook events."""
+    """
+    Handle incoming Jira webhook events to generate test cases for issues
+    that transition to Ready for QA status.
+    """
     try:
         webhook_data = request.json
+        issue_event = _parse_webhook_data(webhook_data)
         
-        # Handle different webhook events
-        event_type = webhook_data.get('webhookEvent')
+        if not issue_event:
+            logger.info("Skipping webhook - not a relevant issue event")
+            return jsonify({"success": True, "message": "Event ignored - not a relevant issue event"}), 200
         
-        if event_type == 'jira:issue_created' and _is_new_hire_ticket(webhook_data):
-            # Handle new hire ticket creation
-            return _handle_new_hire_ticket(webhook_data)
-        elif event_type == 'jira:issue_updated':
-            # Original test case generation logic
-            issue_event = _parse_webhook_data(webhook_data)
-            
-            if not issue_event:
-                return jsonify({"success": True, "message": "Event ignored - not a relevant issue event"}), 200
-            
-            # Check if this is a "Ready for QA" transition
-            to_status = issue_event.get("to_status", "")
-            ready_qa_variations = ["ready for qa", "ready for QA", "ready 4 qa", "ready for quality assurance"]
-            
-            is_ready_for_qa = to_status and any(variation in to_status.lower() for variation in ready_qa_variations)
-            
-            if is_ready_for_qa:
-                ticket_key = issue_event.get("key")
-                # Process the ticket for test case generation
-                result = _process_ready_for_qa_ticket(ticket_key)
-                # Return appropriate response
-                # ...
+        # Check if this is a "Ready for QA" transition
+        to_status = issue_event.get("to_status", "")
+        ready_qa_variations = ["ready for qa", "ready for QA", "ready 4 qa", "ready for quality assurance"]
         
-        # Default response
-        return jsonify({"success": True, "message": "Event processed but no action taken"}), 200
+        is_ready_for_qa = to_status and any(variation in to_status.lower() for variation in ready_qa_variations)
         
+        if is_ready_for_qa:
+            ticket_key = issue_event.get("key")
+            # Process the ticket for test case generation
+            _process_ready_for_qa_ticket(ticket_key)
+            return jsonify({"success": True, "message": f"Processing ticket {ticket_key}"}), 200
+        else:
+            logger.info(f"Ignoring transition to status: {to_status}")
+            return jsonify({"success": True, "message": "Event ignored - not a transition to Ready for QA"}), 200
+            
     except Exception as e:
         logger.exception(f"Error processing webhook: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
-
-def _handle_new_hire_ticket(webhook_data: Dict) -> Tuple[Response, int]:
-    """Handle creation of a new hire ticket."""
-    try:
-        issue = webhook_data.get('issue', {})
-        fields = issue.get('fields', {})
-        
-        # Extract employee information from the ticket
-        employee_info = {
-            'name': fields.get('customfield_10001', ''),  # Employee Name field
-            'role': fields.get('customfield_10002', ''),  # Role field
-            'team': fields.get('customfield_10003', ''),  # Team field
-            'start_date': fields.get('customfield_10004', ''),  # Start Date field
-            'manager': fields.get('customfield_10005', ''),  # Manager field
-            'project_key': fields.get('project', {}).get('key', 'SCRUM')
-        }
-        
-        # Log the extracted information
-        logger.info(f"Extracted employee info: {json.dumps(employee_info)}")
-        
-        # Validate required fields
-        missing_fields = [k for k, v in employee_info.items() if not v]
-        if missing_fields:
-            logger.error(f"Missing required fields: {missing_fields}")
-            return jsonify({
-                "success": False,
-                "message": f"Missing required fields: {', '.join(missing_fields)}"
-            }), 400
-        
-        # Generate onboarding plan
-        success = onboarding_service.generate_onboarding_plan(employee_info)
-        
-        if success:
-            return jsonify({
-                "success": True,
-                "message": f"Generated onboarding plan for {employee_info['name']}"
-            }), 200
-        else:
-            return jsonify({
-                "success": False,
-                "message": "Failed to generate onboarding plan"
-            }), 500
-            
-    except Exception as e:
-        logger.exception(f"Error handling new hire ticket: {str(e)}")
-        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
 def _parse_webhook_data(webhook_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
@@ -398,15 +345,6 @@ def _process_ready_for_qa_ticket(ticket_key: str) -> bool:
             
     except Exception as e:
         logger.exception(f"Error processing ticket {ticket_key}: {str(e)}")
-        return False
-
-# Add this helper function to check if a ticket is a new hire ticket
-def _is_new_hire_ticket(webhook_data):
-    """Check if the webhook is for a new hire ticket."""
-    try:
-        issue_type = webhook_data.get('issue', {}).get('fields', {}).get('issuetype', {}).get('name', '')
-        return issue_type == 'New Hire'
-    except Exception:
         return False
 
 if __name__ == "__main__":
