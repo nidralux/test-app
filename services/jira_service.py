@@ -5,6 +5,7 @@ Service for interacting with Jira API.
 import logging
 from jira import JIRA
 from jira.exceptions import JIRAError
+from typing import Any, List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,3 +74,47 @@ class JiraService:
         except JIRAError as e:
             logger.error(f"Failed to add comment to issue {issue_key}: {e}")
             return False
+    
+    def create_epic(self, project_key: str, summary: str, description: str) -> Optional[Any]:
+        """Create a new epic in Jira."""
+        try:
+            epic = self.client.create_issue(
+                project=project_key,
+                summary=summary,
+                description=description,
+                issuetype={'name': 'Epic'}
+            )
+            return epic
+        except Exception as e:
+            logger.error(f"Error creating epic: {str(e)}")
+            return None
+    
+    def get_team_projects(self, team: str) -> List[Dict]:
+        """Get active projects for a team."""
+        try:
+            # Search for projects with team label/component
+            jql = f'project in projectsLeadByTeam("{team}") AND status != Closed'
+            projects = self.client.search_issues(jql)
+            
+            return [
+                {
+                    'key': project.key,
+                    'name': project.fields.summary,
+                    'description': project.fields.description
+                }
+                for project in projects
+            ]
+        except Exception as e:
+            logger.error(f"Error getting team projects: {str(e)}")
+            return []
+    
+    def get_project_tech_stack(self, project_key: str) -> List[str]:
+        """Get technology stack from project properties/labels."""
+        try:
+            project = self.client.project(project_key)
+            # This assumes you store tech stack in project properties or labels
+            tech_stack = project.raw.get('properties', {}).get('techStack', '').split(',')
+            return [tech.strip() for tech in tech_stack if tech.strip()]
+        except Exception as e:
+            logger.error(f"Error getting project tech stack: {str(e)}")
+            return []
