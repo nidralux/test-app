@@ -128,10 +128,7 @@ try:
     )
 
     ai_service = AIService(
-        Config.TOGETHER_MODEL_ID,
-        Config.TOGETHER_API_KEY,
-        timeout=Config.API_TIMEOUT,
-        max_retries=Config.API_MAX_RETRIES
+        Config.TOGETHER_MODEL_ID
     )
 
     sheets_service = GoogleSheetsService(

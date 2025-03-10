@@ -35,8 +35,8 @@ class Config:
     JIRA_API_TOKEN = os.getenv('JIRA_API_TOKEN')
     
     # Together AI Configuration
-    TOGETHER_API_KEY = os.getenv('TOGETHER_API_KEY')
-    TOGETHER_MODEL_ID = os.getenv('TOGETHER_MODEL_ID')
+    TOGETHER_API_KEY = os.getenv('TOGETHER_API_KEY', None)
+    TOGETHER_MODEL_ID = os.getenv('TOGETHER_MODEL_ID', 'llama-3.3-70b-instruct')
     
     # Google Sheets Configuration
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')

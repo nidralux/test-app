@@ -1,5 +1,5 @@
 """
-Service for generating test cases using Together AI API.
+Service for generating test cases using a local LLM API.
 """
 
 import logging
@@ -12,36 +12,28 @@ from requests.exceptions import RequestException, Timeout
 logger = logging.getLogger(__name__)
 
 class AIService:
-    """Service for AI-powered test case generation using LLM APIs."""
+    """Service for AI-powered test case generation using a local LLM API."""
     
-    def __init__(self, model_id: str, api_key: str, timeout: int = 30, max_retries: int = 3, retry_delay: float = 2.0):
+    def __init__(self, model_id: str, api_key: Optional[str] = None):
         """
-        Initialize AI service with API credentials.
+        Initialize AI service with the LM Studio endpoint.
         
         Args:
-            model_id (str): Together AI model ID
-            api_key (str): Together AI API key
-            timeout (int): Request timeout in seconds
-            max_retries (int): Maximum number of retries for failed API calls
-            retry_delay (float): Delay between retries in seconds
+            model_id (str): Model ID to use
+            api_key (str, optional): Not needed for LM Studio
         """
         if not model_id:
             raise ValueError("Model ID is required")
-        if not api_key:
-            raise ValueError("API key is required")
             
         self.model_id = model_id
-        self.api_key = api_key
-        self.api_url = "https://api.together.xyz/v1/chat/completions"
-        self.timeout = timeout
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
+        # Use the exact IP and port from your curl command
+        self.api_url = "http://192.168.0.81:14342/v1/chat/completions"
         
-        logger.info(f"Initialized AIService with model: {model_id}")
+        logger.info(f"Initialized AIService with local LLM model: {model_id}")
         
     def generate_test_cases(self, ticket_description: str) -> Optional[str]:
         """
-        Generate test cases using the Together AI API.
+        Generate test cases using the LM Studio API.
         
         Args:
             ticket_description (str): Description of the ticket
@@ -59,68 +51,79 @@ class AIService:
             
         logger.info(f"Generating test cases for ticket with {len(ticket_description)} chars")
         
-        # Create system and user prompts
-        system_prompt = """You are an expert test case generator following ISTQB best practices. 
-You design comprehensive test cases with an appropriate number of steps based on the complexity of the feature being tested. 
-Simple features may need only 3-4 steps, while complex workflows might require 8-10 detailed steps.
-Focus on creating thorough, practical test cases that QA engineers can easily follow."""
-        user_prompt = self._create_test_case_prompt(ticket_description)
+        # Create prompt for test case generation
+        prompt = self._create_test_case_prompt(ticket_description)
         
-        # Create API payload
-        payload = self._create_api_payload(system_prompt, user_prompt)
-        
-        # Create headers with authentication
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
+        # Format payload exactly like your curl command
+        payload = {
+            "model": self.model_id,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are an expert test case generator following ISTQB best practices."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2000
+            # Remove the response_format part for now as it was incomplete
         }
 
-        # Make API request with retries
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                logger.debug(f"API request attempt {attempt}/{self.max_retries}")
-                response = requests.post(
-                    self.api_url, 
-                    json=payload, 
-                    headers=headers, 
-                    timeout=self.timeout
-                )
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            # Make the API request
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                logger.debug(f"API request attempt {attempt}/{max_retries}")
                 
-                # Check for successful response
+                response = requests.post(self.api_url, json=payload, headers=headers)
+                
+                # Parse and return the response
                 if response.status_code == 200:
+                    # Chat completions return content in a different format than completions
                     response_json = response.json()
-                    response_text = self._extract_response_text(response_json)
+                    response_text = response_json.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                     logger.info("Successfully generated test cases")
                     return response_text
-                
-                # Handle rate limiting
-                if response.status_code == 429:
-                    wait_time = min(self.retry_delay * attempt * 2, 60)  # Exponential backoff
-                    logger.warning(f"Rate limited. Waiting {wait_time}s before retry.")
-                    time.sleep(wait_time)
-                    continue
+                else:
+                    logger.error(f"API error (Status {response.status_code}): {response.text}")
                     
-                # Log other errors
-                logger.error(f"API error (Status {response.status_code}): {response.text}")
-                
-                # Don't retry for client errors except rate limiting
-                if 400 <= response.status_code < 500 and response.status_code != 429:
-                    break
-                    
-            except Timeout:
-                logger.warning(f"Request timed out (attempt {attempt}/{self.max_retries})")
-            except RequestException as e:
-                logger.error(f"Request exception (attempt {attempt}/{self.max_retries}): {str(e)}")
-            except Exception as e:
-                logger.exception(f"Unexpected error: {str(e)}")
-                break
-                
-            # Wait before retrying (if not the last attempt)
-            if attempt < self.max_retries:
-                time.sleep(self.retry_delay * attempt)  # Progressive delay
-                
-        logger.error("Failed to generate test cases after all retries")
-        return None
+                    if attempt < max_retries:
+                        time.sleep(2)  # Wait before retrying
+                    else:
+                        return None
+        except Exception as e:
+            logger.exception(f"Exception while generating test cases: {e}")
+            return None
+
+    def list_available_models(self) -> List[Dict[str, Any]]:
+        """
+        Get a list of available models from the local LLM API.
+        
+        Returns:
+            List[Dict[str, Any]]: List of available models or empty list on failure
+        """
+        models_url = f"{self.base_url}/v1/models"
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+            
+        try:
+            response = requests.get(models_url, headers=headers, timeout=self.timeout)
+            if response.status_code == 200:
+                return response.json().get("data", [])
+            else:
+                logger.error(f"Failed to list models: {response.status_code} - {response.text}")
+                return []
+        except Exception as e:
+            logger.error(f"Error listing models: {str(e)}")
+            return []
             
     def _create_api_payload(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         """
