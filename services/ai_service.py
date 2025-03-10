@@ -14,63 +14,59 @@ logger = logging.getLogger(__name__)
 class AIService:
     """Service for AI-powered test case generation using a local LLM API."""
     
-    def __init__(self, model_id: str, api_key: Optional[str] = None):
+    def __init__(self, model_id, api_key=None):
         """
-        Initialize AI service with the LM Studio endpoint.
+        Initialize AI service with API credentials.
         
         Args:
             model_id (str): Model ID to use
-            api_key (str, optional): Not needed for LM Studio
+            api_key (str, optional): Not needed for Orion server
         """
-        if not model_id:
-            raise ValueError("Model ID is required")
-            
         self.model_id = model_id
-        # Use the exact IP and port from your curl command
-        self.api_url = "http://192.168.0.81:14342/v1/chat/completions"
+        # Use the domain that worked in your curl test
+        self.api_url = "https://orion.ensemble-software.dev/v1/chat/completions"
         
         logger.info(f"Initialized AIService with local LLM model: {model_id}")
         
-    def generate_test_cases(self, ticket_description: str) -> Optional[str]:
+    def generate_test_cases(self, ticket_description):
         """
-        Generate test cases using the LM Studio API.
+        Generate test cases using the AI API.
         
         Args:
             ticket_description (str): Description of the ticket
             
         Returns:
             str: Generated test cases text or None on failure
-        
-        Raises:
-            ValueError: If ticket_description is empty or not a string
         """
-        if not ticket_description:
-            raise ValueError("Ticket description cannot be empty")
-        if not isinstance(ticket_description, str):
-            raise ValueError("Ticket description must be a string")
+        # Create the test case prompt
+        user_prompt = self._create_test_case_prompt(ticket_description)
+        
+        # For Mistral and other models that don't support system role,
+        # we'll handle both formats based on the model
+        if "mistral" in self.model_id.lower():
+            # Mistral format - combine system and user prompts
+            system_content = "You are an expert test case generator following ISTQB best practices.\n\n"
+            combined_prompt = system_content + user_prompt
             
-        logger.info(f"Generating test cases for ticket with {len(ticket_description)} chars")
-        
-        # Create prompt for test case generation
-        prompt = self._create_test_case_prompt(ticket_description)
-        
-        # Format payload exactly like your curl command
-        payload = {
-            "model": self.model_id,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are an expert test case generator following ISTQB best practices."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.3,
-            "max_tokens": 2000
-            # Remove the response_format part for now as it was incomplete
-        }
+            payload = {
+                "model": self.model_id,
+                "messages": [
+                    {"role": "user", "content": combined_prompt}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 2000
+            }
+        else:
+            # Standard format with system role for other models
+            payload = {
+                "model": self.model_id,
+                "messages": [
+                    {"role": "assistant", "content": "You are an expert test case generator following ISTQB best practices."},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 2000
+            }
 
         headers = {
             "Content-Type": "application/json"
@@ -78,15 +74,22 @@ class AIService:
         
         try:
             # Make the API request
+            logger.info(f"Generating test cases for ticket with {len(ticket_description)} chars")
+            
             max_retries = 3
             for attempt in range(1, max_retries + 1):
                 logger.debug(f"API request attempt {attempt}/{max_retries}")
                 
-                response = requests.post(self.api_url, json=payload, headers=headers)
+                response = requests.post(
+                    self.api_url, 
+                    json=payload, 
+                    headers=headers,
+                    timeout=300  # 60 second timeout
+                )
                 
                 # Parse and return the response
                 if response.status_code == 200:
-                    # Chat completions return content in a different format than completions
+                    # Format exactly matches your successful curl response
                     response_json = response.json()
                     response_text = response_json.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                     logger.info("Successfully generated test cases")

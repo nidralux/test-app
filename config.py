@@ -36,7 +36,7 @@ class Config:
     
     # Together AI Configuration
     TOGETHER_API_KEY = os.getenv('TOGETHER_API_KEY', None)
-    TOGETHER_MODEL_ID = os.getenv('TOGETHER_MODEL_ID', 'llama-3.3-70b-instruct')
+    TOGETHER_MODEL_ID = os.getenv('TOGETHER_MODEL_ID', 'Mistral-7B-Instruct-v0.3-GGUF')
     
     # Google Sheets Configuration
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')

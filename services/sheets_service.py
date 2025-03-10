@@ -264,3 +264,42 @@ class GoogleSheetsService:
             str: URL to access the spreadsheet in a browser
         """
         return f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/edit"
+
+    def add_test_cases_batch(self, ticket_key, test_cases):
+        """Add multiple test cases in a single batch operation."""
+        try:
+            # Format all test cases as rows
+            rows = []
+            for tc in test_cases:
+                row = [
+                    ticket_key,
+                    tc.get('id', ''),
+                    tc.get('section', ''),
+                    tc.get('preconditions', ''),
+                    tc.get('steps', ''),
+                    tc.get('expected_result', ''),
+                    tc.get('input', ''),
+                    tc.get('notes', ''),
+                    tc.get('status', 'Not Run'),  # Default status
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ]
+                rows.append(row)
+            
+            # Use a single batch request to add all rows
+            body = {
+                'values': rows
+            }
+            
+            result = self.service.spreadsheets().values().append(
+                spreadsheetId=self.spreadsheet_id,
+                range='Sheet1!A2',
+                valueInputOption='RAW',
+                insertDataOption='INSERT_ROWS',
+                body=body
+            ).execute()
+            
+            logger.info(f"Added {len(rows)} rows to {result.get('updates', {}).get('updatedRange')} in spreadsheet for ticket {ticket_key}")
+            return True
+        except Exception as e:
+            logger.exception(f"Error adding test cases: {str(e)}")
+            return False

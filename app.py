@@ -18,6 +18,7 @@ from typing import Dict, Any, Optional, Callable, Union, Tuple
 from flask import Flask, request, jsonify, Response
 import hmac
 import hashlib
+import threading
 
 from services.jira_service import JiraService
 from services.ai_service import AIService
@@ -173,32 +174,37 @@ def validate_webhook_signature(f: Callable) -> Callable:
 
 @app.route('/jira-webhook', methods=['POST'])
 def jira_webhook():
-    """
-    Handle incoming Jira webhook events to generate test cases for issues
-    that transition to Ready for QA status.
-    """
+    """Handle incoming Jira webhook events."""
     try:
         webhook_data = request.json
         issue_event = _parse_webhook_data(webhook_data)
         
         if not issue_event:
-            logger.info("Skipping webhook - not a relevant issue event")
-            return jsonify({"success": True, "message": "Event ignored - not a relevant issue event"}), 200
+            return jsonify({"success": True, "message": "Event ignored"}), 200
         
         # Check if this is a "Ready for QA" transition
         to_status = issue_event.get("to_status", "")
-        ready_qa_variations = ["ready for qa", "ready for QA", "ready 4 qa", "ready for quality assurance"]
+        ready_qa_variations = ["ready for qa", "ready for QA", "ready 4 qa"]
         
         is_ready_for_qa = to_status and any(variation in to_status.lower() for variation in ready_qa_variations)
         
         if is_ready_for_qa:
             ticket_key = issue_event.get("key")
-            # Process the ticket for test case generation
-            _process_ready_for_qa_ticket(ticket_key)
-            return jsonify({"success": True, "message": f"Processing ticket {ticket_key}"}), 200
+            
+            # Process the ticket in a background thread
+            thread = threading.Thread(
+                target=_process_ready_for_qa_ticket,
+                args=(ticket_key,)
+            )
+            thread.daemon = True
+            thread.start()
+            
+            return jsonify({
+                "success": True, 
+                "message": f"Processing ticket {ticket_key} in background"
+            }), 200
         else:
-            logger.info(f"Ignoring transition to status: {to_status}")
-            return jsonify({"success": True, "message": "Event ignored - not a transition to Ready for QA"}), 200
+            return jsonify({"success": True, "message": "Event ignored"}), 200
             
     except Exception as e:
         logger.exception(f"Error processing webhook: {str(e)}")
@@ -290,6 +296,12 @@ def _process_ready_for_qa_ticket(ticket_key: str) -> bool:
         bool: True if processing succeeded, False otherwise
     """
     try:
+        # Add initial comment to let users know processing has started
+        jira_service.add_comment(
+            ticket_key, 
+            "Test case generation has started. This may take several minutes..."
+        )
+        
         # Fetch ticket details from Jira
         ticket = jira_service.get_issue(ticket_key)
         
@@ -330,19 +342,30 @@ def _process_ready_for_qa_ticket(ticket_key: str) -> bool:
             logger.error(f"Failed to upload test cases for ticket {ticket_key} to Google Sheets")
             return False
             
-        # Add comment to Jira ticket with link to spreadsheet
-        comment = f"Test cases have been generated and stored in the [Test Cases spreadsheet|{sheets_service.get_spreadsheet_url()}]."
-        jira_result = jira_service.add_comment(ticket_key, comment)
+        # Update comment when complete
+        jira_service.add_comment(
+            ticket_key,
+            f"Test cases have been generated and stored in the [Test Cases spreadsheet|{sheets_service.get_spreadsheet_url()}]."
+        )
         
-        if not jira_result:
-            logger.warning(f"Failed to add comment to ticket {ticket_key}")
-            # Continue anyway as this is non-critical
-            
         return True
             
     except Exception as e:
         logger.exception(f"Error processing ticket {ticket_key}: {str(e)}")
+        jira_service.add_comment(
+            ticket_key,
+            "Error generating test cases. Please check logs or try again."
+        )
         return False
+
+# Dictionary to track status of test case generation
+generation_status = {}
+
+@app.route('/status/<ticket_key>', methods=['GET'])
+def check_status(ticket_key):
+    """Check the status of test case generation for a ticket."""
+    status = generation_status.get(ticket_key, "Not started")
+    return jsonify({"ticket": ticket_key, "status": status})
 
 if __name__ == "__main__":
     logger.info(f"Starting Test Case Generator on {Config.HOST}:{Config.PORT}")
